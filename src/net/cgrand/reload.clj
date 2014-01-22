@@ -19,26 +19,30 @@
                     ::watch-fn 
                     (let [ws (-> (java.nio.file.FileSystems/getDefault)
                                .newWatchService)
-                          file-paths (atom #{})]
-                      (future
-                        (loop []
-                          (let [wk (.take ws)
-                                ^java.nio.file.Path dir (.watchable wk)
-                                paths (map (fn [^java.nio.file.WatchEvent e]
-                                             (.resolve dir (.context e))) 
-                                           (.pollEvents wk))]
-                            (if (some @file-paths paths)
-                              (do
-                                (.close ws)
-                                ;; file updates concurrent with reloading may be skipped
-                                (println "Reloading" (ns-name ns))
-                                (alter-meta! ns assoc ::deps #{}
-                                  ::watch-fn nil)
-                                (require (ns-name ns) :reload)
-                                (auto-reload ns))
-                              (do
-                                (.reset wk)
-                                (recur))))))
+                          file-paths (atom #{})
+                          reloader-fn (fn []
+                                        (loop []
+                                          (let [wk (.take ws)
+                                                ^java.nio.file.Path dir (.watchable wk)
+                                                paths (map (fn [^java.nio.file.WatchEvent e]
+                                                             (.resolve dir (.context e)))
+                                                           (.pollEvents wk))]
+                                            (if (some @file-paths paths)
+                                              (do
+                                                (.close ws)
+                                                ;; file updates concurrent with reloading may be skipped
+                                                (println "Reloading" (ns-name ns))
+                                                (alter-meta! ns assoc ::deps #{}
+                                                             ::watch-fn nil)
+                                                (require (ns-name ns) :reload)
+                                                (auto-reload ns))
+                                              (do
+                                                (.reset wk)
+                                                (recur))))))]
+                      (doto (Thread. reloader-fn)
+                        (.setName (format "enlive auto-reloader: %s" ns))
+                        (.setDaemon true)
+                        (.start))
                       (fn [path]
                         (swap! file-paths conj path)
                         (.register (.getParent path) ws 
